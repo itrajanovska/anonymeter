@@ -3,7 +3,7 @@
 # See https://github.com/statice/anonymeter/blob/main/LICENSE.md for details.
 """Privacy evaluator that measures the inference risk."""
 
-from typing import List, Optional
+from typing import List, Optional, Union, Tuple, Any, Dict
 
 import numpy as np
 import numpy.typing as npt
@@ -11,22 +11,27 @@ import pandas as pd
 
 from anonymeter.neighbors.mixed_types_kneighbors import MixedTypeKNeighbors
 from anonymeter.stats.confidence import EvaluationResults, PrivacyRisk
+from numpy import ndarray, dtype
+from numpy._typing._array_like import _ScalarType_co
+from pandas import DataFrame
 
 
 def _run_attack(
-    target: pd.DataFrame,
-    syn: pd.DataFrame,
-    n_attacks: int,
-    aux_cols: List[str],
-    secret: str,
-    n_jobs: int,
-    naive: bool,
-    regression: Optional[bool],
-) -> int:
+        target: pd.DataFrame,
+        syn: pd.DataFrame,
+        n_attacks: int,
+        aux_cols: List[str],
+        secret: str,
+        n_jobs: int,
+        naive: bool,
+        regression: Optional[bool],
+) -> tuple[int, Union[Tuple[npt.NDArray, npt.NDArray], npt.NDArray, None], DataFrame]:
     if regression is None:
         regression = pd.api.types.is_numeric_dtype(target[secret])
 
     targets = target.sample(n_attacks, replace=False)
+
+    guesses_idx = None
 
     if naive:
         guesses = syn.sample(n_attacks)[secret]
@@ -40,11 +45,12 @@ def _run_attack(
 
         guesses = syn.iloc[guesses_idx.flatten()][secret]
 
-    return evaluate_inference_guesses(guesses=guesses, secrets=targets[secret], regression=regression).sum()
+    return evaluate_inference_guesses(guesses=guesses, secrets=targets[secret],
+                                      regression=regression).sum(), guesses_idx, targets
 
 
 def evaluate_inference_guesses(
-    guesses: pd.Series, secrets: pd.Series, regression: bool, tolerance: float = 0.05
+        guesses: pd.Series, secrets: pd.Series, regression: bool, tolerance: float = 0.05
 ) -> npt.NDArray:
     """Evaluate the success of an inference attack.
 
@@ -146,14 +152,14 @@ class InferenceEvaluator:
     """
 
     def __init__(
-        self,
-        ori: pd.DataFrame,
-        syn: pd.DataFrame,
-        aux_cols: List[str],
-        secret: str,
-        regression: Optional[bool] = None,
-        n_attacks: int = 500,
-        control: Optional[pd.DataFrame] = None,
+            self,
+            ori: pd.DataFrame,
+            syn: pd.DataFrame,
+            aux_cols: List[str],
+            secret: str,
+            regression: Optional[bool] = None,
+            n_attacks: int = 500,
+            control: Optional[pd.DataFrame] = None,
     ):
         self._ori = ori
         self._syn = syn
@@ -172,8 +178,10 @@ class InferenceEvaluator:
         self._regression = regression
         self._aux_cols = aux_cols
         self._evaluated = False
+        self._data_groups = self._ori[self._secret].unique().tolist()
 
-    def _attack(self, target: pd.DataFrame, naive: bool, n_jobs: int) -> int:
+    def _attack(self, target: pd.DataFrame, naive: bool, n_jobs: int) -> tuple[int, Union[Tuple[npt.NDArray, npt.NDArray],
+                    npt.NDArray, None], DataFrame]:
         return _run_attack(
             target=target,
             syn=self._syn,
@@ -199,9 +207,9 @@ class InferenceEvaluator:
             The evaluated ``InferenceEvaluator`` object.
 
         """
-        self._n_baseline = self._attack(target=self._ori, naive=True, n_jobs=n_jobs)
-        self._n_success = self._attack(target=self._ori, naive=False, n_jobs=n_jobs)
-        self._n_control = (
+        self._n_baseline, _, _ = self._attack(target=self._ori, naive=True, n_jobs=n_jobs)
+        self._n_success, self._guesses_idx_success, self._target = self._attack(target=self._ori, naive=False, n_jobs=n_jobs)
+        self._n_control, self._guesses_idx_control, self._target_control = (
             None if self._control is None else self._attack(target=self._control, naive=False, n_jobs=n_jobs)
         )
 
@@ -258,3 +266,70 @@ class InferenceEvaluator:
         """
         results = self.results(confidence_level=confidence_level)
         return results.risk(baseline=baseline)
+
+    def risk_for_groups(self, confidence_level: float = 0.95) -> dict[str, dict[str, Union[EvaluationResults, PrivacyRisk]]]:
+        """Compute the attack risks on a group level, for every unique value of `self._data_groups`.
+
+            Parameters
+            ----------
+            confidence_level : float, default is 0.95
+                Confidence level for the error bound calculation.
+
+            Returns
+            -------
+            dict[str, dict[str, EvaluationResults | PrivacyRisk]]
+                The group as a key, and then for every group the results (EvaluationResults),
+                and the risks (PrivacyRisk).
+
+            """
+        if not self._evaluated:
+            self.evaluate(n_jobs=-2)
+
+        all_results = {}
+        
+        # For every unique group in `self._data_groups`
+        for group in self._data_groups:
+            # Get the guess ids for the current group
+            guesses = self._syn.iloc[self._guesses_idx_success.flatten()].reset_index()
+            guesses = guesses[guesses[self._secret] == group][self._secret]
+
+            # Get the target values for the current group
+            target = self._target.reset_index()
+            target = target.iloc[guesses.index] #todo ivana these should be equivalent to the guess order numbers
+
+            # Count the number of success attacks
+            n_success = evaluate_inference_guesses(guesses=guesses,
+                                                   secrets=target[self._secret],
+                                                   regression=self._regression).sum()
+
+            # Get the (control) guess ids for the current group
+            guesses_control = self._syn.iloc[self._guesses_idx_control.flatten()].reset_index()
+            guesses_control = guesses_control[guesses_control[self._secret] == group][self._secret]
+
+            # Get the control target values for the current group
+            target_control = None if self._control is None else self._target_control.reset_index()
+            target_control = target_control.iloc[guesses_control.index] #todo ivana these should be equivalent to the guess order numbers
+
+            # Count the number of success control attacks
+            n_control = (None if self._control is None else
+                         evaluate_inference_guesses(guesses=guesses_control,
+                                                    secrets=target_control[self._secret],
+                                                    regression=self._regression).sum())
+
+            # Recreate the EvaluationResults for the current group
+            results = EvaluationResults(
+                n_attacks=self._n_attacks, # todo ivana, how do we decide on this number here?
+                n_success=n_success,
+                n_baseline=self._n_baseline, # todo ivana, how do we decide on this number here?
+                n_control=n_control,
+                confidence_level=confidence_level,
+            )
+            # Compute the risk
+            risk = results.risk()
+
+            all_results[group] = {
+                "results": results,
+                "risk": risk
+            }
+
+        return all_results
