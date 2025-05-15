@@ -204,13 +204,11 @@ class EvaluationResults:
         n_attacks_control: Optional[int] = None,
     ):
         self.n_attacks = n_attacks
-        if not n_attacks_ori and not n_attacks_baseline and not n_attacks_control:
+        if None in [n_attacks_ori, n_attacks_baseline, n_attacks_control]:
+            # Setting all to self.n_attacks because of at least one missing value..
             n_attacks_ori = self.n_attacks
             n_attacks_baseline = self.n_attacks
             n_attacks_control = self.n_attacks
-        else:
-            raise ValueError("Either all n_attacks_ori or n_attacks_baseline and n_attacks_control must be specified,"
-                             "or only n_attacks.")
 
         self.attack_rate = success_rate(n_total=n_attacks_ori, n_success=n_success, confidence_level=confidence_level)
 

@@ -37,7 +37,7 @@ def _run_attack(
         # When an `ml_model` is passed we don't want to sample, but rather predict for all targets
         # as we assume it can scale to all target samples, better rather than using MixedTypeKNeighbors
         targets = target
-        n_attacks = targets.shape[0] # this is needed for consistency, for the naive attack below
+        n_attacks = targets.shape[0]  # this is needed for consistency, for the naive attack below
 
     if naive:
         guesses = syn.sample(n_attacks)[secret]
@@ -264,6 +264,7 @@ class InferenceEvaluator:
             raise RuntimeError("The inference evaluator wasn't evaluated yet. Please, run `evaluate()` first.")
 
         return EvaluationResults(
+            n_attacks=self._n_attacks,
             n_attacks_ori=self._n_attacks_ori,
             n_attacks_baseline=self._n_attacks_baseline,
             n_attacks_control=self._n_attacks_control,
@@ -347,9 +348,10 @@ class InferenceEvaluator:
 
             # Recreate the EvaluationResults for the current group
             results = EvaluationResults(
-                n_attacks=self._n_attacks, # passing for
+                n_attacks=self._n_attacks,  # passing for
                 n_attacks_ori=self._n_attacks_ori,
-                n_attacks_baseline=self._n_attacks_baseline, # We leave the overall n_attacks_baseline here, it doesn't change the risk
+                n_attacks_baseline=self._n_attacks_baseline,
+                # We leave the overall n_attacks_baseline here, it doesn't change the risk
                 n_attacks_control=self._n_attacks_control,
                 n_success=n_success,
                 n_baseline=self._n_baseline,  # We leave the overall _n_baseline here, it doesn't change the risk
