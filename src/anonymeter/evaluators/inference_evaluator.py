@@ -348,6 +348,7 @@ class InferenceEvaluator:
 
             # Recreate the EvaluationResults for the current group
             results = EvaluationResults(
+                n_attacks=self._n_attacks, # passing for
                 n_attacks_ori=self._n_attacks_ori,
                 n_attacks_baseline=self._n_attacks_baseline, # We leave the overall n_attacks_baseline here, it doesn't change the risk
                 n_attacks_control=self._n_attacks_control,

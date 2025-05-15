@@ -194,14 +194,24 @@ class EvaluationResults:
 
     def __init__(
         self,
-        n_attacks_ori: int,
-        n_attacks_baseline: int,
-        n_attacks_control: int,
+        n_attacks: int,
         n_success: int,
         n_baseline: int,
         n_control: Optional[int] = None,
         confidence_level: float = 0.95,
+        n_attacks_ori: Optional[int] = None,
+        n_attacks_baseline: Optional[int] = None,
+        n_attacks_control: Optional[int] = None,
     ):
+        self.n_attacks = n_attacks
+        if not n_attacks_ori and not n_attacks_baseline and not n_attacks_control:
+            n_attacks_ori = self.n_attacks
+            n_attacks_baseline = self.n_attacks
+            n_attacks_control = self.n_attacks
+        else:
+            raise ValueError("Either all n_attacks_ori or n_attacks_baseline and n_attacks_control must be specified,"
+                             "or only n_attacks.")
+
         self.attack_rate = success_rate(n_total=n_attacks_ori, n_success=n_success, confidence_level=confidence_level)
 
         self.baseline_rate = success_rate(n_total=n_attacks_baseline, n_success=n_baseline, confidence_level=confidence_level)
