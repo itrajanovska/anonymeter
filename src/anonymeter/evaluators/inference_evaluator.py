@@ -10,7 +10,6 @@ import numpy.typing as npt
 import pandas as pd
 from pandas import DataFrame
 
-from anonymeter.models.inference_models import NNModel
 from anonymeter.neighbors.mixed_types_kneighbors import MixedTypeKNeighbors
 from anonymeter.stats.confidence import EvaluationResults, PrivacyRisk
 
