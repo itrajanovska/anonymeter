@@ -3,16 +3,16 @@
 # See https://github.com/statice/anonymeter/blob/main/LICENSE.md for details.
 """Privacy evaluator that measures the inference risk."""
 
-from typing import List, Optional, Union, Tuple, Any, Dict
+from typing import List, Optional, Union, Tuple, Any
 
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
+from pandas import DataFrame
 
 from anonymeter.models.inference_models import NNModel
 from anonymeter.neighbors.mixed_types_kneighbors import MixedTypeKNeighbors
 from anonymeter.stats.confidence import EvaluationResults, PrivacyRisk
-from pandas import DataFrame
 
 
 def _run_attack(
@@ -24,31 +24,34 @@ def _run_attack(
         n_jobs: int,
         naive: bool,
         regression: Optional[bool],
-        nn: str
-) -> tuple[int, Union[Tuple[npt.NDArray, npt.NDArray], npt.NDArray, None], DataFrame]:
+        ml_model: Optional[Any],
+        sample_attacks: bool
+) -> tuple[int, Union[Tuple[npt.NDArray, npt.NDArray], pd.Series, None], DataFrame]:
     if regression is None:
         regression = pd.api.types.is_numeric_dtype(target[secret])
 
-    targets = target.sample(n_attacks, replace=False)
-
-    guesses_idx = None
+    # We only sample if `ml_model` is set to None, i.e MixedTypeKNeighbors is used,
+    # or `sample_attacks` is set to True by default.
+    if ml_model is None or sample_attacks:
+        targets = target.sample(n_attacks, replace=False)
+    else:
+        # When an `ml_model` is passed we don't want to sample, but rather predict for all targets
+        # as we assume it can scale to all target samples, better rather than using MixedTypeKNeighbors
+        targets = target
+        n_attacks = targets.shape[0] # this is needed for consistency, for the naive attack below
 
     if naive:
         guesses = syn.sample(n_attacks)[secret]
-
     else:
-        if nn == "neural_network":
-            nn = NNModel(train_data=syn, label=secret).fit()
-            guesses = nn.predict(targets)
-        elif nn == "knn":
+        if ml_model is not None:
+            guesses = ml_model.predict(targets)
+        else:
             nn = MixedTypeKNeighbors(n_jobs=n_jobs, n_neighbors=1).fit(candidates=syn[aux_cols])
             guesses_idx = nn.kneighbors(queries=targets[aux_cols])
             if isinstance(guesses_idx, tuple):
                 raise RuntimeError("guesses_idx cannot be a tuple")
 
             guesses = syn.iloc[guesses_idx.flatten()][secret]
-        else:
-            raise ValueError("nn should either be neural_network or knn")
 
     return evaluate_inference_guesses(guesses=guesses, secrets=targets[secret],
                                       regression=regression).sum(), guesses, targets
@@ -153,6 +156,13 @@ class InferenceEvaluator:
         the variable.
     n_attacks : int, default is 500
         Number of attack attempts.
+    ml_model: Any
+        An ml model fitted on `syn` as training data, and `secret` as target, that supports ::predict(x).
+        If not None, it will be used over the MixedTypeKNeighbors in the attack.
+    sample_attacks: bool, optional
+        Specifies whether we should sample `n_attacks` samples from the `ori` or `control` dataset
+        in the attack phase. When a custom `ml_model` is being passed which can scale to more attacks,
+        `sample_attacks` can be set to False so that we predict the values for all samples in `ori` and `control`.
 
     """
 
@@ -165,13 +175,23 @@ class InferenceEvaluator:
             regression: Optional[bool] = None,
             n_attacks: int = 500,
             control: Optional[pd.DataFrame] = None,
-            nn: str = "knn"
+            ml_model: Optional[Any] = None,
+            sample_attacks: Optional[bool] = True
     ):
         self._ori = ori
         self._syn = syn
         self._control = control
         self._n_attacks = n_attacks
-        self._nn = nn
+        self._ml_model = ml_model
+        self._sample_attacks = sample_attacks
+        if not self._sample_attacks:
+            self._n_attacks_ori = self._ori.shape[0]
+            self._n_attacks_baseline = self._ori.shape[0]
+            self._n_attacks_control = self._control.shape[0]
+        else:
+            self._n_attacks_ori = self._n_attacks
+            self._n_attacks_baseline = self._n_attacks
+            self._n_attacks_control = self._n_attacks
 
         # check if secret is a string column
         if not isinstance(secret, str):
@@ -189,7 +209,7 @@ class InferenceEvaluator:
 
     def _attack(self, target: pd.DataFrame, naive: bool, n_jobs: int) -> tuple[
         int, Union[Tuple[npt.NDArray, npt.NDArray],
-        npt.NDArray, None], DataFrame]:
+        pd.Series, None], DataFrame]:
         return _run_attack(
             target=target,
             syn=self._syn,
@@ -199,7 +219,8 @@ class InferenceEvaluator:
             n_jobs=n_jobs,
             naive=naive,
             regression=self._regression,
-            nn=self._nn
+            ml_model=self._ml_model,
+            sample_attacks=self._sample_attacks
         )
 
     def evaluate(self, n_jobs: int = -2) -> "InferenceEvaluator":
@@ -244,7 +265,9 @@ class InferenceEvaluator:
             raise RuntimeError("The inference evaluator wasn't evaluated yet. Please, run `evaluate()` first.")
 
         return EvaluationResults(
-            n_attacks=self._n_attacks,
+            n_attacks_ori=self._n_attacks_ori,
+            n_attacks_baseline=self._n_attacks_baseline,
+            n_attacks_control=self._n_attacks_control,
             n_success=self._n_success,
             n_baseline=self._n_baseline,
             n_control=self._n_control,
@@ -304,18 +327,18 @@ class InferenceEvaluator:
             target = self._target[self._target[self._secret] == group]
 
             # Get the guesses for the current group
-            guess = self._guesses_success[target.index]
+            guess = self._guesses_success.loc[target.index]
 
             # Count the number of success attacks
             n_success = evaluate_inference_guesses(guesses=guess,
                                                    secrets=target[self._secret],
                                                    regression=self._regression).sum()
 
-            # Get the targets for the current group
+            # Get the targets for the current control group
             target_control = self._target_control[self._target_control[self._secret] == group]
 
-            # Get the guesses for the current group
-            guesses_control = self._guesses_control[target_control.index]
+            # Get the guesses for the current control group
+            guesses_control = self._guesses_control.loc[target_control.index]
 
             # Count the number of success control attacks
             n_control = (None if self._control is None else
@@ -325,9 +348,11 @@ class InferenceEvaluator:
 
             # Recreate the EvaluationResults for the current group
             results = EvaluationResults(
-                n_attacks=self._n_attacks,  # todo ivana, how do we decide on this number here?
+                n_attacks_ori=self._n_attacks_ori,
+                n_attacks_baseline=self._n_attacks_baseline, # We leave the overall n_attacks_baseline here, it doesn't change the risk
+                n_attacks_control=self._n_attacks_control,
                 n_success=n_success,
-                n_baseline=self._n_baseline,  # todo ivana, how do we decide on this number here?
+                n_baseline=self._n_baseline,  # We leave the overall _n_baseline here, it doesn't change the risk
                 n_control=n_control,
                 confidence_level=confidence_level,
             )

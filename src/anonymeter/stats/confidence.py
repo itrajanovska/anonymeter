@@ -194,23 +194,27 @@ class EvaluationResults:
 
     def __init__(
         self,
-        n_attacks: int,
+        n_attacks_ori: int,
+        n_attacks_baseline: int,
+        n_attacks_control: int,
         n_success: int,
         n_baseline: int,
         n_control: Optional[int] = None,
         confidence_level: float = 0.95,
     ):
-        self.attack_rate = success_rate(n_total=n_attacks, n_success=n_success, confidence_level=confidence_level)
+        self.attack_rate = success_rate(n_total=n_attacks_ori, n_success=n_success, confidence_level=confidence_level)
 
-        self.baseline_rate = success_rate(n_total=n_attacks, n_success=n_baseline, confidence_level=confidence_level)
+        self.baseline_rate = success_rate(n_total=n_attacks_baseline, n_success=n_baseline, confidence_level=confidence_level)
 
         self.control_rate = (
             None
             if n_control is None
-            else success_rate(n_total=n_attacks, n_success=n_control, confidence_level=confidence_level)
+            else success_rate(n_total=n_attacks_control, n_success=n_control, confidence_level=confidence_level)
         )
 
-        self.n_attacks = n_attacks
+        self.n_attacks_ori = n_attacks_ori
+        self.n_attacks_baseline = n_attacks_baseline
+        self.n_attacks_control = n_attacks_control
         self.n_success = n_success
         self.n_baseline = n_baseline
         self.n_control = n_control
