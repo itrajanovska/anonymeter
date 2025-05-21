@@ -237,9 +237,9 @@ class InferenceEvaluator:
 
         """
         self._n_baseline, _, _ = self._attack(target=self._ori, naive=True, n_jobs=n_jobs)
-        self._n_success, self._guesses_success, self._target = self._attack(target=self._ori, naive=False,
+        self._n_success, self.guesses_success, self.target = self._attack(target=self._ori, naive=False,
                                                                             n_jobs=n_jobs)
-        self._n_control, self._guesses_control, self._target_control = (
+        self._n_control, self.guesses_control, self.target_control = (
             None if self._control is None else self._attack(target=self._control, naive=False, n_jobs=n_jobs)
         )
 
@@ -324,27 +324,31 @@ class InferenceEvaluator:
         # For every unique group in `self._data_groups`
         for group in self._data_groups:
             # Get the targets for the current group
-            target = self._target[self._target[self._secret] == group]
+            target = self.target[self.target[self._secret] == group]
 
             # Get the guesses for the current group
-            guess = self._guesses_success.loc[target.index]
+            guess = self.guesses_success.loc[target.index]
 
             # Count the number of success attacks
             n_success = evaluate_inference_guesses(guesses=guess,
                                                    secrets=target[self._secret],
                                                    regression=self._regression).sum()
 
-            # Get the targets for the current control group
-            target_control = self._target_control[self._target_control[self._secret] == group]
+            target_control = None
+            guesses_control = None
+            if self._control:
+                # Get the targets for the current control group
+                target_control = self.target_control[self.target_control[self._secret] == group]
 
-            # Get the guesses for the current control group
-            guesses_control = self._guesses_control.loc[target_control.index]
+                # Get the guesses for the current control group
+                guesses_control = self.guesses_control.loc[target_control.index]
 
-            # Count the number of success control attacks
-            n_control = (None if self._control is None else
-                         evaluate_inference_guesses(guesses=guesses_control,
-                                                    secrets=target_control[self._secret],
-                                                    regression=self._regression).sum())
+                # Count the number of success control attacks
+                n_control = evaluate_inference_guesses(guesses=guesses_control,
+                                                        secrets=target_control[self._secret],
+                                                        regression=self._regression).sum()
+            else:
+                n_control = None
 
             # Recreate the EvaluationResults for the current group
             results = EvaluationResults(
