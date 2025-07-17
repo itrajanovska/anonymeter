@@ -37,10 +37,10 @@ def _run_attack(
         # When an `ml_model` is passed we don't want to sample, but rather predict for all targets
         # as we assume it can scale to all target samples, better rather than using MixedTypeKNeighbors
         targets = target
-        n_attacks = targets.shape[0]  # this is needed for consistency, for the naive attack below
 
     if naive:
         guesses = syn.sample(n_attacks)[secret]
+        targets = target.sample(n_attacks, replace=False) # todo ivana we need this after dropping nans in the synthetic data
     else:
         if ml_model is not None:
             guesses = ml_model.predict(targets)
@@ -185,7 +185,7 @@ class InferenceEvaluator:
         self._sample_attacks = sample_attacks
         if not self._sample_attacks:
             self._n_attacks_ori = self._ori.shape[0]
-            self._n_attacks_baseline = self._ori.shape[0]
+            self._n_attacks_baseline = min(self._syn.shape[0], self._n_attacks_ori)
             self._n_attacks_control = self._control.shape[0]
         else:
             self._n_attacks_ori = self._n_attacks
@@ -206,13 +206,13 @@ class InferenceEvaluator:
         self._evaluated = False
         self._data_groups = self._ori[self._secret].unique().tolist()
 
-    def _attack(self, target: pd.DataFrame, naive: bool, n_jobs: int) -> tuple[
+    def _attack(self, target: pd.DataFrame, naive: bool, n_jobs: int, n_attacks: int) -> tuple[
         int, Union[Tuple[npt.NDArray, npt.NDArray],
         pd.Series, None], DataFrame]:
         return _run_attack(
             target=target,
             syn=self._syn,
-            n_attacks=self._n_attacks,
+            n_attacks=n_attacks,
             aux_cols=self._aux_cols,
             secret=self._secret,
             n_jobs=n_jobs,
@@ -236,11 +236,17 @@ class InferenceEvaluator:
             The evaluated ``InferenceEvaluator`` object.
 
         """
-        self._n_baseline, _, _ = self._attack(target=self._ori, naive=True, n_jobs=n_jobs)
-        self._n_success, self._guesses_success, self._target = self._attack(target=self._ori, naive=False,
-                                                                            n_jobs=n_jobs)
-        self._n_control, self._guesses_control, self._target_control = (
-            None if self._control is None else self._attack(target=self._control, naive=False, n_jobs=n_jobs)
+        # n_attacks is effective here
+        self._n_baseline, _, _ = self._attack(target=self._ori, naive=True, n_jobs=n_jobs,
+                                              n_attacks=self._n_attacks_baseline)
+
+        # n_attacks is not effective here, just needed for the baseline
+        self._n_success, self.guesses_success, self.target = self._attack(target=self._ori, naive=False, n_jobs=n_jobs,
+                                                                          n_attacks=self._n_attacks_ori)
+        # n_attacks is not effective here, just needed for the baseline
+        self._n_control, self.guesses_control, self.target_control = (
+            None if self._control is None else self._attack(target=self._control, naive=False, n_jobs=n_jobs,
+                                                            n_attacks=self._n_attacks_control)
         )
 
         self._evaluated = True
@@ -324,27 +330,29 @@ class InferenceEvaluator:
         # For every unique group in `self._data_groups`
         for group in self._data_groups:
             # Get the targets for the current group
-            target = self._target[self._target[self._secret] == group]
+            target = self.target[self.target[self._secret] == group]
 
             # Get the guesses for the current group
-            guess = self._guesses_success.loc[target.index]
+            guess = self.guesses_success.loc[target.index]
 
             # Count the number of success attacks
             n_success = evaluate_inference_guesses(guesses=guess,
                                                    secrets=target[self._secret],
                                                    regression=self._regression).sum()
 
-            # Get the targets for the current control group
-            target_control = self._target_control[self._target_control[self._secret] == group]
+            if self._control is not None:
+                # Get the targets for the current control group
+                target_control = self.target_control[self.target_control[self._secret] == group]
 
-            # Get the guesses for the current control group
-            guesses_control = self._guesses_control.loc[target_control.index]
+                # Get the guesses for the current control group
+                guesses_control = self.guesses_control.loc[target_control.index]
 
-            # Count the number of success control attacks
-            n_control = (None if self._control is None else
-                         evaluate_inference_guesses(guesses=guesses_control,
-                                                    secrets=target_control[self._secret],
-                                                    regression=self._regression).sum())
+                # Count the number of success control attacks
+                n_control = evaluate_inference_guesses(guesses=guesses_control,
+                                                        secrets=target_control[self._secret],
+                                                        regression=self._regression).sum()
+            else:
+                n_control = None
 
             # Recreate the EvaluationResults for the current group
             results = EvaluationResults(
