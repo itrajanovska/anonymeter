@@ -52,6 +52,9 @@ def _run_attack(
 
             guesses = syn.iloc[guesses_idx.flatten()][secret]
 
+    assert len(guesses) == len(targets), "Predictions and targets have different lengths"
+    guesses.index = targets.index
+
     return evaluate_inference_guesses(guesses=guesses, secrets=targets[secret],
                                       regression=regression).sum(), guesses, targets
 
@@ -332,6 +335,9 @@ class InferenceEvaluator:
             # Get the targets for the current group
             target = self.target[self.target[self._secret] == group]
 
+            assert len(self.guesses_success) == len(self.target)
+            assert (self.guesses_success.index == self.target.index).all()
+
             # Get the guesses for the current group
             guess = self.guesses_success.loc[target.index]
 
@@ -343,6 +349,10 @@ class InferenceEvaluator:
             if self._control is not None:
                 # Get the targets for the current control group
                 target_control = self.target_control[self.target_control[self._secret] == group]
+
+
+                assert len(self.guesses_control) == len(self.target_control)
+                assert (self.guesses_control.index == self.target_control.index).all()
 
                 # Get the guesses for the current control group
                 guesses_control = self.guesses_control.loc[target_control.index]
